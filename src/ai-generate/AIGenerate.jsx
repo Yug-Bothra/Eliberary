@@ -1,6 +1,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { jsPDF } from "jspdf";
 
 function AIGenerate() {
   const [inputText, setInputText] = useState("");
@@ -48,9 +49,180 @@ function AIGenerate() {
     }
   };
 
+const handleDownloadPDF = () => {
+  if (!generatedText) return;
+
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginLeft = 20;
+  const marginRight = 20;
+  const marginTop = 20;
+  const marginBottom = 20;
+  const contentWidth = pageWidth - marginLeft - marginRight;
+  let yPosition = marginTop;
+
+  // ---------- Helpers ----------
+  const sanitize = (text) => text.replace(/[^\x20-\x7E\n]/g, "");
+
+  const checkPageBreak = (requiredHeight) => {
+    if (yPosition + requiredHeight > pageHeight - marginBottom) {
+      doc.addPage();
+      yPosition = marginTop;
+    }
+  };
+
+  const renderFormattedText = (text, x, maxWidth, lineHeight = 6) => {
+    const clean = sanitize(text);
+    const lines = doc.splitTextToSize(clean, maxWidth);
+    lines.forEach((line) => {
+      checkPageBreak(lineHeight);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(12);
+      doc.setTextColor(0, 0, 0); // Always black
+      doc.text(line, x, yPosition);
+      yPosition += lineHeight;
+    });
+    return lines.length * lineHeight;
+  };
+
+  const renderTable = (tableBuffer) => {
+    const rows = tableBuffer.map(r =>
+      r.split("|").slice(1, -1).map(c => c.trim())
+    );
+
+    // Calc column widths
+    const colCount = Math.max(...rows.map(r => r.length));
+    const colWidths = new Array(colCount).fill(0);
+
+    rows.forEach((row) => {
+      row.forEach((cell, ci) => {
+        const w = doc.getTextWidth(cell) + 6;
+        if (w > colWidths[ci]) colWidths[ci] = w;
+      });
+    });
+
+    // Scale table to fit width
+    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+    if (totalWidth > contentWidth) {
+      const scale = contentWidth / totalWidth;
+      for (let ci = 0; ci < colWidths.length; ci++) {
+        colWidths[ci] *= scale;
+      }
+    }
+
+    // Draw rows
+    rows.forEach((row, ri) => {
+      checkPageBreak(12);
+      let x = marginLeft;
+      let rowHeight = 8;
+
+      const wrappedCells = row.map((cell, ci) =>
+        doc.splitTextToSize(cell, colWidths[ci] - 4)
+      );
+      rowHeight = Math.max(...wrappedCells.map(c => c.length * 6 + 2));
+
+      row.forEach((cell, ci) => {
+        doc.setFont("helvetica", ri === 0 ? "bold" : "normal");
+        doc.setFontSize(11);
+        doc.setTextColor(0, 0, 0);
+
+        doc.rect(x, yPosition, colWidths[ci], rowHeight);
+        doc.text(wrappedCells[ci], x + 2, yPosition + 6);
+
+        x += colWidths[ci];
+      });
+
+      yPosition += rowHeight;
+    });
+
+    yPosition += 6;
+  };
+
+  const processMarkdownText = (text) => {
+    const lines = text.split("\n");
+    let tableBuffer = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      let line = sanitize(lines[i].trim());
+
+      // Tables
+      if (line.startsWith("|") && line.endsWith("|")) {
+        if (/^\|[-\s|]+\|$/.test(line)) continue; // Skip separator row
+        tableBuffer.push(line);
+
+        if (i + 1 >= lines.length || !lines[i + 1].trim().startsWith("|")) {
+          renderTable(tableBuffer);
+          tableBuffer = [];
+        }
+        continue;
+      }
+
+      // Paragraphs
+      if (!line) {
+        yPosition += 4;
+        continue;
+      }
+
+      checkPageBreak(12);
+      renderFormattedText(line, marginLeft, contentWidth, 6);
+      yPosition += 4;
+    }
+  };
+
+  const renderFooter = () => {
+    const totalPages = doc.internal.pages.length - 1;
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(0, 0, 0);
+      const pageText = `Page ${i} of ${totalPages}`;
+      doc.text(pageText, pageWidth - marginRight - 25, pageHeight - 10);
+    }
+  };
+
+  // ---------- Document ----------
+  // Date
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(9);
+  doc.setTextColor(0, 0, 0);
+  const currentDate = new Date().toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  doc.text(`Generated on: ${currentDate}`, marginLeft, yPosition);
+  yPosition += 10;
+
+  // Title
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.setTextColor(0, 0, 0);
+  const topicLines = doc.splitTextToSize(sanitize(inputText), contentWidth);
+  doc.text(topicLines, marginLeft, yPosition);
+  yPosition += topicLines.length * 6 + 8;
+
+  // Body
+  processMarkdownText(generatedText);
+
+  // Footer
+  renderFooter();
+
+  // Save file
+  const sanitizedTopic = inputText.replace(/[^a-z0-9]/gi, "_").substring(0, 40);
+  const timestamp = new Date().toISOString().slice(0, 10);
+  doc.save(`Notes_${sanitizedTopic}_${timestamp}.pdf`);
+};
+
+
+
+
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Professional Blue Navbar */}
+      {/* Navbar */}
       <nav className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -64,14 +236,13 @@ function AIGenerate() {
                 <span className="text-xl font-semibold text-gray-900">StudyAI</span>
               </div>
             </div>
-           
           </div> 
         </div>
       </nav>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header Section */}
+        {/* Header */}
         <div className="text-center mb-10">
           <h1 className="text-4xl sm:text-5xl font-bold text-gray-900 mb-4">
             AI Study Notes Generator
@@ -203,6 +374,16 @@ function AIGenerate() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                           </svg>
                         </button>
+                        {/* Download PDF button with proper download icon */}
+                        <button 
+                          onClick={handleDownloadPDF}
+                          className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                          title="Download as PDF"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -220,7 +401,7 @@ function AIGenerate() {
             </div>
           )}
 
-          {/* Empty state when no generation yet */}
+          {/* Empty state */}
           {!generated && (
             <div className="text-center py-12 max-w-lg mx-auto">
               <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -234,7 +415,7 @@ function AIGenerate() {
           )}
         </div>
 
-        {/* Features section */}
+        {/* Features */}
         <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8">
           <div className="text-center">
             <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center mx-auto mb-4">
@@ -260,11 +441,24 @@ function AIGenerate() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
             </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Any Topic</h3>
-            <p className="text-gray-600">From science to history, covering all subjects</p>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">Export Anytime</h3>
+            <p className="text-gray-600">Save your notes as PDF for offline study</p>
           </div>
         </div>
       </div>
+
+      {/* Footer */}
+      <footer className="mt-16 border-t border-gray-200 py-6 bg-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row justify-between items-center">
+          <p className="text-gray-600 text-sm">
+            © {new Date().getFullYear()} StudyAI. All rights reserved.
+          </p>
+          <div className="flex gap-4 mt-4 sm:mt-0">
+            <a href="#" className="text-gray-500 hover:text-gray-700 text-sm">Privacy Policy</a>
+            <a href="#" className="text-gray-500 hover:text-gray-700 text-sm">Terms</a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
